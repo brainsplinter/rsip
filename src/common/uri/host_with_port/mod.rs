@@ -138,10 +138,12 @@ impl<'a> std::convert::TryFrom<tokenizer::Tokenizer<'a, &'a str, char>> for Host
             Err(_) => Host::Domain(tokenizer.host.into()),
         };
 
-        let port = match tokenizer.port {
-            Some(port) => Some(port.parse::<u16>()?).map(Into::into),
-            None => None,
-        };
+        let port = tokenizer
+            .port
+            .filter(|p| !p.is_empty())
+            .and_then(|p| p.parse::<u16>().ok())
+            .map(Into::into);
+        eprintln!("after port.parse::<u16>()");
 
         Ok(Self { host, port })
     }
@@ -199,8 +201,9 @@ pub mod tokenizer {
     {
         pub fn tokenize(part: T) -> GResult<T, Self> {
             use nom::{
+                branch::alt,
                 bytes::complete::{tag, take_till1, take_until},
-                combinator::rest,
+                combinator::{map, rest},
                 sequence::tuple,
             };
 
@@ -210,13 +213,22 @@ pub mod tokenizer {
                         TokenizerError::from(("host with port", part)).into()
                     })?;
 
-            let (host, port) = match tuple::<_, _, nom::error::VerboseError<T>, _>((
-                take_until(":"),
-                tag(":"),
-                rest,
+            let (host, port) = match alt((
+                map(
+                    tuple((tag("["), take_until("]"), tag("]"), rest)),
+                    |(_open, ipv6, _close, port)| (ipv6, port),
+                ),
+                map(
+                    tuple::<_, _, nom::error::VerboseError<T>, _>((
+                        take_until(":"),
+                        tag(":"),
+                        rest,
+                    )),
+                    |(ipv4, _colon, port)| (ipv4, port),
+                ),
             ))(host_with_port)
             {
-                Ok((_, (host, _, port))) => (host, Some(port)),
+                Ok((_, (host, port))) => (host, Some(port)),
                 Err(_) => {
                     //this is not going to ever fail actually, since rest never returns an
                     //error
